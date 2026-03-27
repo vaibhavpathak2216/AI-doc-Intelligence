@@ -6,9 +6,24 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.gpt_service import ask_gpt, ask_gpt_with_context
 from app.rag_service import add_document, search_similar_chunks
+from fastapi.security import APIKeyHeader
+from fastapi import Security
 
 # Create uploads folder if it doesn't exist
 os.makedirs("uploads", exist_ok=True)
+
+# API Key security
+API_KEY = os.getenv("APP_API_KEY", "dev-secret-key-123")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_api_key(api_key: str = Security(api_key_header)):
+    """Verify the API key for protected endpoints."""
+    if api_key != API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key. Include X-API-Key header."
+        )
+    return api_key
 
 # Create FastAPI app
 app = FastAPI(
@@ -62,7 +77,7 @@ def ask_question(request: QuestionRequest):
 
 
 @app.post("/upload")
-def upload_document(file: UploadFile = File(...)):
+def upload_document(file: UploadFile = File(...), api_key: str = Security(verify_api_key)):
     """
     Upload a PDF document to the knowledge base.
     The document will be processed and stored for querying.
@@ -87,7 +102,7 @@ def upload_document(file: UploadFile = File(...)):
 
 
 @app.post("/query", response_model=RAGResponse)
-def query_document(request: RAGRequest):
+def query_document(request: RAGRequest, api_key: str = Security(verify_api_key)):
     """
     Ask a question about uploaded documents.
     Uses RAG to find relevant sections and answer accurately.
