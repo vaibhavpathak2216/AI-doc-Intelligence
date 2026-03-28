@@ -2,15 +2,23 @@
 
 import os
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Security
 from pydantic import BaseModel
 from app.gpt_service import ask_gpt, ask_gpt_with_context
 from app.rag_service import add_document, search_similar_chunks
 from fastapi.security import APIKeyHeader
-from fastapi import Security
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
-# Create uploads folder if it doesn't exist
-os.makedirs("uploads", exist_ok=True)
+# 1. Initialize the FastAPI app first
+app = FastAPI(
+    title="Document Intelligence API",
+    description="AI-powered API that answers questions from your documents using RAG",
+    version="2.0.0"
+)
+
+# 2. Mount static files so CSS/JS can load
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # API Key security
 API_KEY = os.getenv("APP_API_KEY", "dev-secret-key-123")
@@ -64,7 +72,10 @@ def root():
         "message": "Document Intelligence API v2.0 is live!",
         "endpoints": ["/ask", "/upload", "/query", "/history"]
     }
-
+@app.get("/ui")
+def serve_ui():
+    """Serve the chat UI"""
+    return FileResponse("static/index.html")
 
 @app.post("/ask", response_model=AnswerResponse)
 def ask_question(request: QuestionRequest):
