@@ -2,74 +2,66 @@
 
 import os
 import numpy as np
-import faiss
 from app.pdf_service import extract_text_from_pdf, chunk_text
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Global variables - model loads lazily on first use
-embedding_model = None
-
 # In-memory storage
 document_store = {
     "chunks": [],
-    "index": None
+    "embeddings": []
 }
 
 
-def get_embedding_model():
-    """Load embedding model only when first needed."""
-    global embedding_model
-    if embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        print("Loading embedding model...")
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("Embedding model loaded!")
-    return embedding_model
+def get_embedding(text: str) -> np.ndarray:
+    """Lightweight hash-based embedding."""
+    import hashlib
+    words = text.lower().split()
+    vector = np.zeros(384)
+    for i, word in enumerate(words):
+        hash_val = int(hashlib.md5(word.encode()).hexdigest(), 16)
+        vector[hash_val % 384] += 1.0
+    norm = np.linalg.norm(vector)
+    if norm > 0:
+        vector = vector / norm
+    return vector
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Calculate similarity between two vectors."""
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
 
 
 def add_document(pdf_path: str) -> int:
     """Process a PDF and add it to our vector store."""
-    model = get_embedding_model()
-    
     print(f"Extracting text from {pdf_path}...")
     text = extract_text_from_pdf(pdf_path)
-    
+
     chunks = chunk_text(text)
     print(f"Created {len(chunks)} chunks")
-    
-    print("Creating embeddings...")
-    embeddings = model.encode(chunks)
-    
-    dimension = embeddings.shape[1]
-    
-    if document_store["index"] is None:
-        document_store["index"] = faiss.IndexFlatL2(dimension)
-    
+
+    embeddings = [get_embedding(chunk) for chunk in chunks]
+
     document_store["chunks"].extend(chunks)
-    document_store["index"].add(np.array(embeddings, dtype=np.float32))
-    
+    document_store["embeddings"].extend(embeddings)
+
     print(f"Added {len(chunks)} chunks to vector store")
     return len(chunks)
 
 
 def search_similar_chunks(query: str, top_k: int = 3) -> list[str]:
     """Find the most relevant chunks for a query."""
-    if document_store["index"] is None:
+    if not document_store["chunks"]:
         return []
-    
-    model = get_embedding_model()
-    query_embedding = model.encode([query])
-    
-    distances, indices = document_store["index"].search(
-        np.array(query_embedding, dtype=np.float32),
-        top_k
-    )
-    
-    relevant_chunks = []
-    for idx in indices[0]:
-        if idx < len(document_store["chunks"]):
-            relevant_chunks.append(document_store["chunks"][idx])
-    
-    return relevant_chunks
+
+    query_embedding = get_embedding(query)
+
+    similarities = [
+        cosine_similarity(query_embedding, emb)
+        for emb in document_store["embeddings"]
+    ]
+
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+
+    return [document_store["chunks"][i] for i in top_indices]
